@@ -18,17 +18,26 @@ npx playwright install chromium
 
 ### Configure credentials
 
+The script needs `BANCO_USERNAME` and `BANCO_PASSWORD` in a `.env` file.
+
+**Option A: Manual**
+
 Copy the template and fill in your credentials:
 
 ```bash
 cp .env.tpl .env
+# Edit .env with your RUT and password
 ```
 
-Or inject from 1Password:
+**Option B: 1Password CLI**
+
+The `.env.tpl` file contains [1Password secret references](https://developer.1password.com/docs/cli/secret-references/) that point to the `Bancochile Banconexion 2.0` item in the Private vault. Run:
 
 ```bash
 npm run env
 ```
+
+This uses `op inject` to resolve the references and write the `.env` file.
 
 ## Usage
 
