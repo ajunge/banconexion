@@ -1,8 +1,11 @@
 {
   "name": "banconexion",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "CLI for Banco de Chile business portal automation",
+  "main": "cli.js",
+  "bin": {
+    "banconexion": "./cli.js"
+  },
   "scripts": {
     "env": "op inject -i .env.tpl -o .env --force --account my.1password.com",
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -1,6 +1,6 @@
 # Banconexion
 
-CLI tool to automate express transfers on Banco de Chile's business portal using Playwright.
+CLI for Banco de Chile's business portal automation using Playwright.
 
 ## Setup
 
@@ -18,11 +18,9 @@ npx playwright install chromium
 
 ### Configure credentials
 
-The script needs `BANCO_USERNAME` and `BANCO_PASSWORD` in a `.env` file.
+The CLI needs `BANCO_USERNAME` and `BANCO_PASSWORD` in a `.env` file.
 
 **Option A: Manual**
-
-Copy the template and fill in your credentials:
 
 ```bash
 cp .env.tpl .env
@@ -42,30 +40,51 @@ This uses `op inject` to resolve the references and write the `.env` file.
 ## Usage
 
 ```bash
-node transfer.js --to <beneficiary> --amount <amount> [options]
+node cli.js <command> [options]
 ```
 
-### Required options
+### Commands
 
-| Option              | Description                          |
-| ------------------- | ------------------------------------ |
-| `--to <name>`       | Beneficiary name (as saved in bank)  |
-| `--amount <amount>` | Transfer amount in CLP               |
+#### `transfer` — Send an express transfer
 
-### Optional flags
+```bash
+node cli.js transfer --to <beneficiary> --amount <amount> [options]
+```
 
 | Option                | Description                                              |
 | --------------------- | -------------------------------------------------------- |
+| `--to <name>`         | Beneficiary name (as saved in bank) **(required)**       |
+| `--amount <amount>`   | Transfer amount in CLP **(required)**                    |
 | `--from <account>`    | Source account number or alias                           |
 | `--account <account>` | Beneficiary account filter (for multi-account contacts)  |
 | `--message <text>`    | Transfer description                                     |
 | `--headless`          | Run without opening a browser window                     |
 | `--debug`             | Save screenshots at each step (`debug-*.png`)            |
 
-### Example
+Example:
 
 ```bash
-node transfer.js --to "Juan Perez" --amount 50000 --from "Cuenta Corriente" --message "Pago servicio"
+node cli.js transfer --to "Juan Perez" --amount 50000 --from "Cuenta Corriente" --message "Pago servicio"
 ```
 
 The transfer requires Mi Pass approval on your phone before completing.
+
+#### `balances` — Show account and credit card balances
+
+```bash
+node cli.js balances [options]
+```
+
+| Option       | Description                            |
+| ------------ | -------------------------------------- |
+| `--headless` | Run without opening a browser window   |
+| `--debug`    | Save screenshots at each step          |
+| `--json`     | Output as JSON instead of a table      |
+
+Example:
+
+```bash
+node cli.js balances --headless --json
+```
+
+Retrieves balances from all accounts (cuenta corriente) and credit cards (national and international).

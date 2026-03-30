@@ -1,109 +1,54 @@
-#!/usr/bin/env node
+const { createBrowser } = require("../lib/browser");
+const { login } = require("../lib/login");
+const { screenshot } = require("../lib/screenshot");
 
-const { chromium } = require("playwright");
-const { program } = require("commander");
-require("dotenv").config();
-
-const LOGIN_URL =
-  "https://login.portalempresas.bancochile.cl/bancochile-web/empresa/login/index.html#/login";
-
-program
-  .requiredOption("--to <beneficiary>", "Beneficiary name (as saved in bank)")
-  .requiredOption("--amount <amount>", "Transfer amount in CLP")
-  .option("--from <from>", "Source account number or alias")
-  .option("--account <account>", "Beneficiary account number or bank name (for beneficiaries with multiple accounts)")
-  .option("--message <message>", "Transfer message/description", "")
-  .option("--headless", "Run in headless mode (no browser window)", false)
-  .option("--debug", "Take screenshots at each step", false)
-  .parse();
-
-const opts = program.opts();
-
-async function screenshot(page, name) {
-  if (opts.debug) {
-    await page.screenshot({ path: `debug-${name}.png`, fullPage: true });
-    console.log(`  📸 Screenshot saved: debug-${name}.png`);
-  }
-}
-
-async function login(page) {
-  console.log("1. Navigating to login page...");
-  await page.goto(LOGIN_URL, { waitUntil: "networkidle" });
-  await screenshot(page, "01-login-page");
-
-  // Wait for the login form to render (Angular SPA)
-  console.log("2. Waiting for login form...");
-  await page.getByLabel("RUT").waitFor({ timeout: 15000 });
-  await screenshot(page, "02-login-form-loaded");
-
-  const username = process.env.BANCO_USERNAME;
-  const password = process.env.BANCO_PASSWORD;
-
-  if (!username || !password) {
-    throw new Error(
-      "Missing BANCO_USERNAME or BANCO_PASSWORD in .env file"
-    );
-  }
-
-  console.log("3. Entering credentials...");
-  await page.getByLabel("RUT").fill(username);
-  await page.locator('input[name="password"]').fill(password);
-
-  await screenshot(page, "03-credentials-filled");
-
-  // Click login button
-  console.log("4. Clicking login...");
-  await page.getByRole("button", { name: /ingresar/i }).click();
-
-  // Wait for navigation after login
-  console.log("5. Waiting for dashboard...");
-  await page.waitForNavigation({ waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
-  await page.waitForTimeout(3000);
-  await screenshot(page, "04-dashboard");
-  console.log("   Logged in successfully.");
-}
-
-async function navigateToTransferencias(page) {
+async function navigateToTransferencias(page, debug) {
   console.log("6. Navigating to Transferencias Express...");
 
-  // Click the sidebar link — "Transferencia Express" (no trailing 's')
   const sidebarLink = page.locator('a:has-text("Transferencia Express")').first();
   await sidebarLink.waitFor({ timeout: 10000 });
   await sidebarLink.click();
   await page.waitForTimeout(3000);
-  await screenshot(page, "05a-nav-click");
+  await screenshot(page, "05a-nav-click", debug);
 
-  // If we landed on a Transferencias page with tabs, click the "Express" tab
   const expressTab = page.locator('a').filter({ hasText: /^Express$/ }).first();
   if (await expressTab.isVisible().catch(() => false)) {
     await expressTab.click();
     await page.waitForTimeout(2000);
-    await screenshot(page, "05b-express-tab");
+    await screenshot(page, "05b-express-tab", debug);
   }
 
-  // Verify we're on the right page by checking for the form
   await page.waitForSelector('#tipoOperacion, #destinatario, [name="tipoOperacion"]', { timeout: 10000 });
-  await screenshot(page, "06-transferencias-express");
+  await screenshot(page, "06-transferencias-express", debug);
   console.log("   On Transferencias Express page.");
 }
 
-async function selectSourceAccount(page, fromFilter) {
-  // Ensure "Tipo de Operación" is set to TRANSFERENCIA
+async function selectSourceAccount(page, fromFilter, debug) {
+  // Try to set "Tipo de Operación" to TRANSFERENCIA if needed
   const tipoSelect = page.locator('.ui-select-container').nth(0);
-  const tipoText = await tipoSelect.textContent();
-  if (/seleccione/i.test(tipoText)) {
+  const tipoMatch = await tipoSelect.locator('.ui-select-match, [class*="match"]').first();
+  const tipoText = await tipoMatch.textContent().catch(() => '');
+
+  if (!/TRANSFERENCIA/i.test(tipoText)) {
     console.log("6a. Selecting Tipo de Operación: TRANSFERENCIA...");
     await tipoSelect.click();
-    await page.waitForTimeout(500);
-    const transferOption = page.locator('.ui-select-choices-row:has-text("TRANSFERENCIA")').first();
-    await transferOption.click();
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1000);
+    // Try clicking any visible option with TRANSFERENCIA
+    const transferOption = page.locator('text=TRANSFERENCIA').first();
+    const found = await transferOption.waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
+    if (found) {
+      await transferOption.click();
+      await page.waitForTimeout(1500);
+    } else {
+      // Close dropdown and continue — it may already be set
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+    }
   }
 
   console.log("6b. Selecting source account (Cuenta de Origen)...");
   if (fromFilter) console.log(`   Filter: "${fromFilter}"`);
 
-  // Wait for Cuenta de Origen to be enabled
   await page.waitForFunction(
     () => {
       const el = document.querySelector('#cuenta');
@@ -112,24 +57,20 @@ async function selectSourceAccount(page, fromFilter) {
     { timeout: 10000 }
   );
 
-  // Cuenta de Origen is the 2nd ui-select (index 1)
   const cuentaSelect = page.locator('.ui-select-container').nth(1);
   await cuentaSelect.click();
   await page.waitForTimeout(1000);
 
-  // If search is enabled, type the filter
   const searchInput = cuentaSelect.locator('input.ui-select-search');
   if (fromFilter && await searchInput.isVisible().catch(() => false)) {
     await searchInput.fill(fromFilter);
     await page.waitForTimeout(1000);
   }
 
-  // Get all available options
   const options = page.locator('.ui-select-choices-row, [role="option"]');
   const count = await options.count();
 
   if (count === 0) {
-    // Try append-to-body dropdown
     const bodyOptions = page.locator('.ui-select-choices-content .ui-select-choices-row');
     const bodyCount = await bodyOptions.count();
     if (bodyCount === 0) throw new Error("Could not find any source account options");
@@ -148,7 +89,7 @@ async function selectSourceAccount(page, fromFilter) {
   }
 
   await page.waitForTimeout(1500);
-  await screenshot(page, "06c-account-selected");
+  await screenshot(page, "06c-account-selected", debug);
 }
 
 async function selectMatchingOption(options, count, filter, label) {
@@ -160,7 +101,6 @@ async function selectMatchingOption(options, count, filter, label) {
       return;
     }
   }
-  // No match — list available options
   console.log(`   Available ${label}s:`);
   for (let i = 0; i < count; i++) {
     const text = await options.nth(i).textContent();
@@ -169,20 +109,15 @@ async function selectMatchingOption(options, count, filter, label) {
   throw new Error(`No ${label} matching "${filter}" found. See options above.`);
 }
 
-async function selectBeneficiary(page, beneficiaryName, accountFilter) {
+async function selectBeneficiary(page, beneficiaryName, accountFilter, debug) {
   console.log(`7. Selecting beneficiary: "${beneficiaryName}"...`);
   if (accountFilter) console.log(`   Account filter: "${accountFilter}"`);
 
-  // The beneficiary is the 3rd ui-select (index 2: after tipo operacion and cuenta origen)
-  const uiSelects = page.locator('.ui-select-container');
-
-  // Find the one related to beneficiary (index 2, 0-based)
-  const benefSelect = uiSelects.nth(2);
+  const benefSelect = page.locator('.ui-select-container').nth(2);
   await benefSelect.click();
   await page.waitForTimeout(1000);
-  await screenshot(page, "07a-beneficiary-clicked");
+  await screenshot(page, "07a-beneficiary-clicked", debug);
 
-  // Now try to type — the search input inside this container should be visible
   const searchInput = benefSelect.locator('input.ui-select-search');
   const isVisible = await searchInput.isVisible().catch(() => false);
 
@@ -194,9 +129,8 @@ async function selectBeneficiary(page, beneficiaryName, accountFilter) {
     await page.keyboard.type(beneficiaryName, { delay: 50 });
   }
   await page.waitForTimeout(2000);
-  await screenshot(page, "07b-beneficiary-typed");
+  await screenshot(page, "07b-beneficiary-typed", debug);
 
-  // Get all matching suggestions
   const suggestions = page.locator(
     `[role="option"]:has-text("${beneficiaryName}"), .ui-select-choices-row:has-text("${beneficiaryName}")`
   );
@@ -209,7 +143,6 @@ async function selectBeneficiary(page, beneficiaryName, accountFilter) {
     await suggestions.first().click();
     console.log(`   Selected beneficiary from dropdown (${count} option(s)).`);
   } else {
-    // Multiple accounts — filter by account number or bank name
     console.log(`   Found ${count} accounts, filtering by "${accountFilter}"...`);
     let matched = false;
     for (let i = 0; i < count; i++) {
@@ -222,7 +155,6 @@ async function selectBeneficiary(page, beneficiaryName, accountFilter) {
       }
     }
     if (!matched) {
-      // Log available options and fall back to first
       console.log("   Available accounts:");
       for (let i = 0; i < count; i++) {
         const text = await suggestions.nth(i).textContent();
@@ -235,16 +167,15 @@ async function selectBeneficiary(page, beneficiaryName, accountFilter) {
   }
 
   await page.waitForTimeout(1000);
-  await screenshot(page, "07-beneficiary-selected");
+  await screenshot(page, "07-beneficiary-selected", debug);
 }
 
-async function enterAmount(page, amount) {
+async function enterAmount(page, amount, debug) {
   console.log(`8. Entering amount: $${Number(amount).toLocaleString("es-CL")}...`);
 
   const amountInput = page.locator('input#monto');
   await amountInput.waitFor({ state: "attached", timeout: 10000 });
 
-  // The field may be disabled briefly after beneficiary selection
   await page.waitForFunction(
     () => !document.querySelector('input#monto').disabled,
     { timeout: 10000 }
@@ -252,11 +183,10 @@ async function enterAmount(page, amount) {
 
   await amountInput.click();
   await amountInput.fill(String(amount));
-
-  await screenshot(page, "08-amount-entered");
+  await screenshot(page, "08-amount-entered", debug);
 }
 
-async function enterMessage(page, message) {
+async function enterMessage(page, message, debug) {
   if (!message) return;
   console.log(`9. Entering message: "${message}"...`);
 
@@ -267,16 +197,15 @@ async function enterMessage(page, message) {
   if (msgInput) {
     await msgInput.click();
     await msgInput.fill(message);
-    await screenshot(page, "09-message-entered");
+    await screenshot(page, "09-message-entered", debug);
   } else {
     console.log("   No message field found, skipping.");
   }
 }
 
-async function confirmTransfer(page) {
+async function confirmTransfer(page, debug) {
   console.log("10. Selecting Mi Pass authorization and submitting...");
 
-  // Click the "Mi Pass" authorization option
   const miPassOption = page.locator(
     ':text("Mi Pass"), label:has-text("Mi Pass"), [class*="mi-pass"], input[value*="mipass"]'
   ).first();
@@ -287,9 +216,8 @@ async function confirmTransfer(page) {
     await page.waitForTimeout(1000);
   }
 
-  await screenshot(page, "10-mipass-selected");
+  await screenshot(page, "10-mipass-selected", debug);
 
-  // Now look for a submit/transfer/confirm button
   const confirmBtn = page.locator(
     'button:has-text("Transferir"), button:has-text("Continuar"), button:has-text("Enviar"), button:has-text("Confirmar"), button[type="submit"]'
   ).first();
@@ -298,33 +226,27 @@ async function confirmTransfer(page) {
     await confirmBtn.click();
     console.log("   Clicked submit.");
   } else {
-    // Maybe clicking Mi Pass already triggers the flow
     console.log("   No separate submit button found, Mi Pass may trigger directly.");
   }
 
   await page.waitForTimeout(3000);
-  await screenshot(page, "11-submitted");
+  await screenshot(page, "11-submitted", debug);
 }
 
-async function waitForMiPass(page) {
+async function waitForMiPass(page, debug) {
   console.log("\n==========================================");
   console.log("  MI PASS AUTHORIZATION REQUIRED");
   console.log("  Please approve on your Mi Pass app.");
   console.log("==========================================\n");
 
-  // Wait for the Mi Pass screen to appear, then wait for it to resolve
-  // Poll for up to 120 seconds for the authorization to complete
   const startTime = Date.now();
   const timeout = 180000;
 
   while (Date.now() - startTime < timeout) {
     await page.waitForTimeout(3000);
 
-    // Check for success — look for visible elements with transfer-complete language
-    // Use page.evaluate to only match visible elements and avoid false positives
     const result = await page.evaluate(() => {
       const body = document.body.innerText;
-      // "Comprobante de Transferencia" or "Transferencia exitosa/realizada" indicate completion
       if (/comprobante\s+de\s+transferencia/i.test(body)) return { status: "success" };
       if (/transferencia\s+(exitosa|realizada|aprobada)/i.test(body)) return { status: "success" };
       if (/operaci[oó]n\s+express/i.test(body) && /datos\s+de\s+la\s+operaci[oó]n/i.test(body)) return { status: "success" };
@@ -334,7 +256,7 @@ async function waitForMiPass(page) {
 
     if (result?.status === "success") {
       console.log("   Mi Pass authorization successful!");
-      await screenshot(page, "12-transfer-success");
+      await screenshot(page, "12-transfer-success", debug);
       return true;
     }
 
@@ -348,46 +270,46 @@ async function waitForMiPass(page) {
   throw new Error("Mi Pass authorization timed out after 3 minutes");
 }
 
-async function main() {
-  console.log(`\nBanconexion Transfer`);
-  console.log(`  To: ${opts.to}`);
-  console.log(`  Amount: $${Number(opts.amount).toLocaleString("es-CL")}`);
-  if (opts.from) console.log(`  From: ${opts.from}`);
-  if (opts.account) console.log(`  Account: ${opts.account}`);
-  if (opts.message) console.log(`  Message: ${opts.message}`);
-  console.log("");
+module.exports = function (program) {
+  program
+    .command("transfer")
+    .description("Send an express transfer")
+    .requiredOption("--to <beneficiary>", "Beneficiary name (as saved in bank)")
+    .requiredOption("--amount <amount>", "Transfer amount in CLP")
+    .option("--from <from>", "Source account number or alias")
+    .option("--account <account>", "Beneficiary account filter (for multi-account contacts)")
+    .option("--message <message>", "Transfer message/description", "")
+    .option("--headless", "Run in headless mode", false)
+    .option("--debug", "Take screenshots at each step", false)
+    .action(async (opts) => {
+      console.log(`\nBanconexion Transfer`);
+      console.log(`  To: ${opts.to}`);
+      console.log(`  Amount: $${Number(opts.amount).toLocaleString("es-CL")}`);
+      if (opts.from) console.log(`  From: ${opts.from}`);
+      if (opts.account) console.log(`  Account: ${opts.account}`);
+      if (opts.message) console.log(`  Message: ${opts.message}`);
+      console.log("");
 
-  const browser = await chromium.launch({
-    headless: opts.headless,
-    slowMo: 100,
-  });
+      const { browser, page } = await createBrowser(opts);
 
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    locale: "es-CL",
-  });
+      try {
+        await login(page, opts);
+        await navigateToTransferencias(page, opts.debug);
+        await selectSourceAccount(page, opts.from, opts.debug);
+        await selectBeneficiary(page, opts.to, opts.account, opts.debug);
+        await enterAmount(page, opts.amount, opts.debug);
+        await enterMessage(page, opts.message, opts.debug);
+        await confirmTransfer(page, opts.debug);
+        await waitForMiPass(page, opts.debug);
 
-  const page = await context.newPage();
-
-  try {
-    await login(page);
-    await navigateToTransferencias(page);
-    await selectSourceAccount(page, opts.from);
-    await selectBeneficiary(page, opts.to, opts.account);
-    await enterAmount(page, opts.amount);
-    await enterMessage(page, opts.message);
-    await confirmTransfer(page);
-    await waitForMiPass(page);
-
-    console.log("\nTransfer completed successfully!");
-  } catch (err) {
-    console.error(`\nError: ${err.message}`);
-    await page.screenshot({ path: "debug-error.png", fullPage: true });
-    console.error("Screenshot saved to debug-error.png");
-    process.exit(1);
-  } finally {
-    await browser.close();
-  }
-}
-
-main();
+        console.log("\nTransfer completed successfully!");
+      } catch (err) {
+        console.error(`\nError: ${err.message}`);
+        await page.screenshot({ path: "debug-error.png", fullPage: true });
+        console.error("Screenshot saved to debug-error.png");
+        process.exit(1);
+      } finally {
+        await browser.close();
+      }
+    });
+};
