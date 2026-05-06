@@ -10,5 +10,6 @@ program
 
 require("./commands/transfer")(program);
 require("./commands/balances")(program);
+require("./commands/transactions")(program);
 
 program.parse();

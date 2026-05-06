@@ -88,3 +88,31 @@ node cli.js balances --headless --json
 ```
 
 Retrieves balances from all accounts (cuenta corriente) and credit cards (national and international).
+
+#### `transactions` — Show transactions for an account or credit card
+
+```bash
+node cli.js transactions [--account <number> | --card <last4>] [options]
+```
+
+If neither `--account` nor `--card` is given, the currently selected account on the portal is used. The chosen account number is always echoed in the output.
+
+| Option                 | Description                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `--account <number>`   | Checking account number (e.g. `00-001-70743-06`). Optional — defaults to current. |
+| `--card <last4>`       | Credit card last 4 digits                                                         |
+| `--billed`             | Credit cards only: show billed transactions instead of unbilled                   |
+| `--from <YYYY-MM-DD>`  | Start date (must be combined with `--to`)                                         |
+| `--to <YYYY-MM-DD>`    | End date (must be combined with `--from`)                                         |
+| `--headless`           | Run without opening a browser window                                              |
+| `--debug`              | Save screenshots at each step                                                     |
+| `--json`               | Output as JSON instead of a table                                                 |
+
+Examples:
+
+```bash
+node cli.js transactions --from 2026-05-01 --to 2026-05-06
+node cli.js transactions --account 00-847-02492-10 --from 2026-04-01 --to 2026-04-30
+node cli.js transactions --card 1234 --json
+node cli.js transactions --card 1234 --billed --from 2026-03-01 --to 2026-03-31
+```
